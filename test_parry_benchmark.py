@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Superpowers TDD Verification Suite for Parry:
-Gate 1 (CLI/Action), Gate 2 (AST Fingerprinting & IDE Hooks), Gate 3 (Top-100 Evil AI Benchmark & Model Reliability Leaderboard)
+Comprehensive Verification Suite for Parry:
+CLI / Action, AST Fingerprinting, IDE Hooks, and Top-100 Evil AI Benchmark & Model Leaderboard.
 """
 
 import io
@@ -99,7 +99,7 @@ class TestParryEvilBenchmarkAndFingerprinting(unittest.TestCase):
         self.assertIn("Parry Hybrid Engine", md)
 
     def test_fingerprint_survives_line_number_shift(self) -> None:
-        """Verify Gate 2.1: AST-relative SHA-256 fingerprint stays identical when lines are inserted above."""
+        """Verify AST-relative SHA-256 fingerprint stays identical when lines are inserted above."""
         code_v1 = (
             "def record_login(user_id: str, attempts=[]):\n"
             "    attempts.append(user_id)\n"
@@ -157,6 +157,80 @@ class TestParryEvilBenchmarkAndFingerprinting(unittest.TestCase):
         self.assertFalse(tool["destructiveHint"])
         self.assertTrue(tool["idempotentHint"])
         self.assertFalse(tool["openWorldHint"])
+
+
+    def test_web3_rules_catch_solana_ts_and_ai_agent_vulnerabilities(self) -> None:
+        """Verify all 6 Web3/Solana/AI-Agent rules trigger on vulnerable code and pass on hardened patches."""
+        cases = [
+            (
+                "rust",
+                "pub struct Vault<'info> {\n    pub authority: AccountInfo<'info>,\n}",
+                "pub struct Vault<'info> {\n    pub authority: Signer<'info>,\n}",
+                "PARRY-WEB3-RS001",
+            ),
+            (
+                "rust",
+                "pub fn unstake(user_lamports: u64, w: u64) -> u64 {\n    user_lamports - w\n}",
+                "pub fn unstake(user_lamports: u64, w: u64) -> Option<u64> {\n    user_lamports.checked_sub(w)\n}",
+                "PARRY-WEB3-RS002",
+            ),
+            (
+                "rust",
+                "pub fn cpi(ix: &Instruction, accs: &[AccountInfo], seeds: &[&[&[u8]]]) {\n    invoke_signed(ix, accs, seeds);\n}",
+                "pub fn cpi(p: &AccountInfo, ix: &Instruction, accs: &[AccountInfo], seeds: &[&[&[u8]]]) {\n    check_program_account(p.key);\n    invoke_signed(ix, accs, seeds);\n}",
+                "PARRY-WEB3-RS003",
+            ),
+            (
+                "typescript",
+                "import { Connection } from '@solana-web3/sdk';\n",
+                "import { Connection } from '@solana/web3.js';\n",
+                "PARRY-WEB3-HAL001",
+            ),
+            (
+                "typescript",
+                "export async function run(llmToolArgs: any) {\n  return await sendAndConfirmTransaction(conn, tx, [w]);\n}",
+                "export async function run(llmToolArgs: any) {\n  enforceSpendPolicy(llmToolArgs);\n  return await sendAndConfirmTransaction(conn, tx, [w]);\n}",
+                "PARRY-WEB3-AGT001",
+            ),
+            (
+                "python",
+                'priv = "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"\n',
+                'import os\npriv = os.environ["AGENT_PRIVATE_KEY"]\n',
+                "PARRY-WEB3-SEC001",
+            ),
+        ]
+
+        for lang, bad_code, good_code, expected_rule in cases:
+            bad_findings = parry.scan_source(bad_code, f"test.{lang}", lang)
+            self.assertIn(
+                expected_rule,
+                {f.rule_id for f in bad_findings},
+                f"Expected {expected_rule} for {lang} vulnerable snippet",
+            )
+            good_findings = parry.scan_source(good_code, f"test.{lang}", lang)
+            self.assertEqual(
+                len(good_findings),
+                0,
+                f"Expected 0 findings on hardened patch for {expected_rule}, got {good_findings}",
+            )
+
+    def test_triage_report_and_dm_generator(self) -> None:
+        """Verify `parry.py triage` writes a valid Markdown brief and @parrycli X DM script."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            vault_rs = tmp_path / "vault.rs"
+            vault_rs.write_text(
+                "pub struct Withdraw<'info> {\n    pub authority: AccountInfo<'info>,\n}\n",
+                encoding="utf-8",
+            )
+            out_md = tmp_path / "triage_report.md"
+            rc = parry.run_web3_triage(str(tmp_path), out_md)
+            self.assertEqual(rc, 0)
+            self.assertTrue(out_md.exists())
+            content = out_md.read_text(encoding="utf-8")
+            self.assertIn("PARRY-WEB3-RS001", content)
+            self.assertIn("@parrycli", content)
+            self.assertIn("https://parry.scopeledger.net/web3", content)
 
 
 if __name__ == "__main__":

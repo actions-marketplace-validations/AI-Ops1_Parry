@@ -1,4 +1,4 @@
-"""Automated Gate 2 tests for IDE/MCP/hook bootstrapping, git --staged, post-edit, and <20ms MCP latency."""
+"""Automated tests for IDE/MCP/hook bootstrapping, git --staged, post-edit, and <20ms MCP latency."""
 
 import io
 import json
@@ -17,7 +17,7 @@ import parry
 REPO_DIR = pathlib.Path(__file__).resolve().parent
 
 
-class TestParryGate2IdeHooksAndMcpLatency(unittest.TestCase):
+class TestParryIdeHooksAndMcpLatency(unittest.TestCase):
     def test_dry_run_makes_no_disk_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws = pathlib.Path(tmp) / "workspace"

@@ -187,8 +187,14 @@ def run_action(env: Optional[Dict[str, str]] = None, opener: Optional[Callable[.
 
     baseline_fps: set[str] = set()
     if baseline_file.is_file():
-        data = json.loads(baseline_file.read_text(encoding="utf-8"))
-        baseline_fps = set(data.get("fingerprints", []))
+        try:
+            data = json.loads(baseline_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                raw_fps = data.get("fingerprints", [])
+                if isinstance(raw_fps, list):
+                    baseline_fps = {str(fp) for fp in raw_fps if isinstance(fp, str) and re.match(r"^[a-f0-9]{64}$", fp)}
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[WARN] Failed to parse baseline file {baseline_file}: {exc}", file=sys.stderr)
 
     changed_files: Optional[set[pathlib.Path]] = None
     if changed_only:

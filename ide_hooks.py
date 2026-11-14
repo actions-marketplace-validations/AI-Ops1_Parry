@@ -118,6 +118,8 @@ def _patch_json_file(
     dry_run: bool,
 ) -> Tuple[str, str, Optional[str]]:
     """Safely parse existing JSON object, apply mutator, and return (status, detail, preview)."""
+    if target.is_symlink():
+        raise ValueError(f"Refusing to mutate symlink target: {target}")
     existed = target.exists()
     original_raw = ""
     if existed:

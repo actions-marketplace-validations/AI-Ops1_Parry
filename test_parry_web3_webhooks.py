@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 import parry
 
 
-class TestGate5Features(unittest.TestCase):
+class TestWeb3AndWebhookFeatures(unittest.TestCase):
     def test_webhook_url_ssrf_validation(self):
         # Disallowed: HTTP
         self.assertFalse(parry.validate_webhook_url("http://hooks.slack.com/services/xxx"))

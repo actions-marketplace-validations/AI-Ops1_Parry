@@ -26,10 +26,10 @@ jobs:
       - name: Run Top-100 Evil AI Benchmark & Leaderboard
         run: python3 parry.py bench --leaderboard
 
-      - name: Run Superpowers TDD Verification Suite
+      - name: Run Test Verification Suite
         run: python3 -m unittest discover -v
 
-  parry-pr-shield-dogfood:
+  parry-pr-shield-verification:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -41,7 +41,7 @@ jobs:
         uses: ./
         with:
           paths: "."
-          exclude: "benchmark,parry.py,test_parry_benchmark.py,test_parry_fix.py,test_parry_action.py,test_parry_ide_hooks.py,build_top100_benchmark.py,test_parry_gate4.py,test_parry_gate5.py"
+          exclude: "benchmark,parry.py,test_parry_benchmark.py,test_parry_fix.py,test_parry_action.py,test_parry_ide_hooks.py,build_top100_benchmark.py,test_parry_context_slop.py,test_parry_web3_webhooks.py"
           fail-on: "warning"
           comment-pr: "true"
           changed-only: "false"

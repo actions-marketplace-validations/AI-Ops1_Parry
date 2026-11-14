@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for Gate 4:
+Unit tests for Repo Context Enforcement & Structural Slop Deflection:
 - Cross-file duplicate helper detection (PARRY-SLOP-DUP01)
 - Type & safety escape-hatch spikes (PARRY-SLOP-ESC01)
 - Loop N+1 async database/network calls (PARRY-SLOP-LOOP01)
@@ -18,7 +18,7 @@ import unittest
 import parry
 
 
-class TestParryGate4RepoContextAndStructuralSlop(unittest.TestCase):
+class TestParryRepoContextAndStructuralSlop(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.workspace = pathlib.Path(self.tmp_dir.name)

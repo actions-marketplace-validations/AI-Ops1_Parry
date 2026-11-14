@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for Gate 1: GitHub Action, PR Shield Markdown formatting, SARIF, exclusions, and sticky PR comments.
+Unit tests for GitHub Action, PR Shield Markdown formatting, SARIF, exclusions, and sticky PR comments.
 """
 
 import io
@@ -29,7 +29,7 @@ class _FakeHttpResponse:
         return None
 
 
-class TestParryGate1ActionAndPrShield(unittest.TestCase):
+class TestParryActionAndPrShield(unittest.TestCase):
     def test_pr_comment_markdown_clean_and_sanitized_findings(self) -> None:
         clean_md = parry.format_pr_comment_markdown([], scanned_count=4, elapsed_ms=1.25)
         self.assertIn(parry.PR_SHIELD_MARKER, clean_md)
