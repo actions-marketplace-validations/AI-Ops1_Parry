@@ -116,6 +116,21 @@ def compute_remediation(
     elif rule_id == "PARRY-SLOP-DUP01":
         prompt = "Cross-file duplicate helper detected. Import the existing shared project utility instead of declaring a duplicate copy."
 
+    elif rule_id == "PARRY-SEC-API002":
+        prompt = "Sequential ID enumeration risk: Auto-incrementing integer IDs allow attackers to enumerate resources. Replace with random UUID/ULID/CUID (e.g., id String @id @default(uuid()))."
+        replacement = None
+
+    elif rule_id == "PARRY-SEC-CANARY":
+        prompt = "Canary token detected: Active intrusion detection decoy. Preserve decoy token to detect unauthorized cloning or repository breaches."
+        replacement = None
+
+    elif rule_id == "PARRY-GATE-ONEWAY":
+        prompt = "One-Way Door violation detected: Irreversible action (git force-push, table drop, truncate) cannot be undone. Restrict automated agent actions to two-way doors (branches, PRs, additive migrations)."
+        replacement = None
+
+    elif rule_id == "PARRY-SEC-API001":
+        prompt = "OWASP API #1 IDOR detected: Database lookup by resource ID without ownership verification. Validate that the resource belongs to authenticated user/session (e.g., WHERE id = :id AND user_id = :userId)."
+
     elif rule_id == "PARRY-HAL-RS001":
         prompt = "Obsolete Rust 2015 try!(...) macro detected. Replace 'try!(expr)' with 'expr?'."
         m = re.search(r"\btry!\s*\(", raw_line)
@@ -285,6 +300,59 @@ REPO_RULE_FILENAMES = [
     ".cursor/rules",
     ".parry.json",
 ]
+
+
+def is_canary_token(value: str) -> bool:
+    """Check if a string or token represents an intentional decoy/canary token."""
+    val_upper = value.upper()
+    val_lower = value.lower()
+    if "canarytokens.com" in val_lower or "canarytokens.org" in val_lower:
+        return True
+    if "CANARY" in val_upper:
+        return True
+    if "# canary-token" in val_lower or "// canary-token" in val_lower:
+        return True
+    return False
+
+
+def audit_context_isolation(target_dir: pathlib.Path) -> List[str]:
+    """
+    Audit AI IDE context isolation:
+    1. Checks if sensitive files (.env, *.pem, *.key, id_rsa) exist but are missing from .cursorignore.
+    2. Checks if context instruction files (.cursorrules, AGENTS.md, CLAUDE.md, GEMINI.md) contain raw credentials.
+    """
+    issues: List[str] = []
+    cursorignore = target_dir / ".cursorignore"
+    ignored_patterns = set()
+    if cursorignore.exists():
+        for line in cursorignore.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                ignored_patterns.add(line)
+
+    sensitive_candidates = [".env", ".env.local", ".env.production", "id_rsa", "id_ed25519", "credentials.json"]
+    for cand in sensitive_candidates:
+        cand_path = target_dir / cand
+        if cand_path.exists():
+            covered = any(
+                cand == pat or (pat.endswith("*") and cand.startswith(pat[:-1])) or pat in cand
+                for pat in ignored_patterns
+            )
+            if not covered:
+                issues.append(
+                    f"Sensitive file `{cand}` is present but missing from `.cursorignore`. AI agents may ingest credentials into context."
+                )
+
+    secret_pattern = re.compile(r"\b(?:AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{32,}|xox[baprs]-[0-9a-zA-Z]{10,})\b")
+    context_files = [".cursorrules", "AGENTS.md", "CLAUDE.md", "GEMINI.md"]
+    for cf in context_files:
+        cf_path = target_dir / cf
+        if cf_path.exists():
+            c_text = cf_path.read_text(encoding="utf-8", errors="ignore")
+            if secret_pattern.search(c_text):
+                issues.append(f"Context instruction file `{cf}` contains an exposed secret or API key.")
+
+    return issues
 
 
 def discover_and_sanitize_repo_context(
@@ -554,6 +622,13 @@ SECURITY_AND_LOGIC_RULES: Dict[str, List[Tuple[re.Pattern[str], str, str, str, s
             "Unclosed file descriptor leak: file opened without with context manager.",
             "Use with open(fpath, 'r', encoding='utf-8') as f:.",
         ),
+        (
+            re.compile(r"git['\"],\s*['\"]push['\"],\s*['\"](?:--force|-f)['\"]|git\s+push\s+(?:--force|-f)\b|\bDROP\s+(?:TABLE|DATABASE)\b|\bTRUNCATE\s+(?:TABLE\s+)?[a-zA-Z_]\w*\b", re.IGNORECASE),
+            "PARRY-GATE-ONEWAY",
+            "security",
+            "One-Way Door violation: Irreversible destructive command detected in script.",
+            "Avoid irreversible actions (git push -f, DROP TABLE). Restrict automated agents to two-way doors.",
+        ),
 
     ],
     "typescript": [
@@ -634,6 +709,16 @@ SECURITY_AND_LOGIC_RULES: Dict[str, List[Tuple[re.Pattern[str], str, str, str, s
             "JWT verification explicitly permitting 'none' algorithm.",
             "Enforce robust cryptographic algorithms such as RS256 or HS256.",
         ),
+        (
+            re.compile(
+                r"(?:findUnique|findOne|findFirst)\s*\(\s*\{[\s\S]*?where\s*:\s*\{(?![^}]*\b(?:userId|user_id|owner_id|req\.user|account_id)\b)[^}]*id\s*:\s*(?:req\.)?params\.id[^}]*\}[\s\S]*?\}\s*\)|(?:\.findByPk|\.findById)\s*\(\s*(?:req\.)?params\.id\s*\)"
+            ),
+            "PARRY-SEC-API001",
+            "security",
+            "Potential OWASP API #1 IDOR: Database query by ID parameter without user/tenant ownership check.",
+            "Scope database query to session user: `where: { id: req.params.id, userId: req.user.id }`.",
+        ),
+
     ],
     "javascript": [
         (
@@ -664,6 +749,16 @@ SECURITY_AND_LOGIC_RULES: Dict[str, List[Tuple[re.Pattern[str], str, str, str, s
             "Accidental global variable assignment leaking transaction across requests.",
             "Declare variable with const or let.",
         ),
+        (
+            re.compile(
+                r"(?:findUnique|findOne|findFirst)\s*\(\s*\{[\s\S]*?where\s*:\s*\{(?![^}]*\b(?:userId|user_id|owner_id|req\.user|account_id)\b)[^}]*id\s*:\s*(?:req\.)?params\.id[^}]*\}[\s\S]*?\}\s*\)|(?:\.findByPk|\.findById)\s*\(\s*(?:req\.)?params\.id\s*\)"
+            ),
+            "PARRY-SEC-API001",
+            "security",
+            "Potential OWASP API #1 IDOR: Database query by ID parameter without user/tenant ownership check.",
+            "Scope database query to session user: `where: { id: req.params.id, userId: req.user.id }`.",
+        ),
+
     ],
     "rust": [
         (
@@ -795,6 +890,40 @@ SECURITY_AND_LOGIC_RULES: Dict[str, List[Tuple[re.Pattern[str], str, str, str, s
             "Declare state variable with private or internal visibility.",
         ),
     ],
+    "shell": [
+        (
+            re.compile(r"git\s+push\s+(?:--force|-f)\b|git\s+reset\s+--hard\b|\bDROP\s+(?:TABLE|DATABASE)\b|\bTRUNCATE\s+(?:TABLE\s+)?[a-zA-Z_]\w*\b", re.IGNORECASE),
+            "PARRY-GATE-ONEWAY",
+            "security",
+            "One-Way Door violation: Irreversible destructive action detected in shell script.",
+            "Avoid irreversible actions (git push --force, DROP TABLE). Use reversible PR workflows.",
+        ),
+    ],
+    "sql": [
+        (
+            re.compile(r"\bDROP\s+(?:TABLE|DATABASE)\b|\bTRUNCATE\s+(?:TABLE\s+)?[a-zA-Z_]\w*\b", re.IGNORECASE),
+            "PARRY-GATE-ONEWAY",
+            "security",
+            "One-Way Door violation: Irreversible destructive SQL command detected.",
+            "Use soft-deletes or additive migrations instead of dropping/truncating production tables.",
+        ),
+        (
+            re.compile(r"\b(?:SERIAL\s+PRIMARY\s+KEY|INT\s+AUTO_INCREMENT\s+PRIMARY\s+KEY|INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT)\b", re.IGNORECASE),
+            "PARRY-SEC-API002",
+            "security",
+            "Sequential ID enumeration risk: Auto-increment integer primary key permits predictable resource enumeration.",
+            "Use UUID/ULID column types (e.g. `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`).",
+        ),
+    ],
+    "prisma": [
+        (
+            re.compile(r"\bInt\s+@id\s+@default\(autoincrement\(\)\)"),
+            "PARRY-SEC-API002",
+            "security",
+            "Sequential ID enumeration risk: Integer auto-increment primary key permits predictable resource enumeration.",
+            "Use unpredictable identifiers: `id String @id @default(uuid())` or `@default(cuid())`.",
+        ),
+    ],
 }
 
 def detect_language(file_path: pathlib.Path) -> Optional[str]:
@@ -806,6 +935,10 @@ def detect_language(file_path: pathlib.Path) -> Optional[str]:
         ".js": "javascript",
         ".jsx": "javascript",
         ".sol": "solidity",
+        ".sh": "shell",
+        ".bash": "shell",
+        ".sql": "sql",
+        ".prisma": "prisma",
     }.get(file_path.suffix.lower())
 
 def analyze_python_ast(source: str, file_path: str) -> List[Finding]:
@@ -1494,21 +1627,31 @@ def analyze_pattern_rules(source: str, file_path: str, language: str) -> List[Fi
             col_no = match.start() - source.rfind("\n", 0, match.start())
             sym = find_enclosing_symbol(source, line_no)
             raw_line = lines[line_no - 1] if 0 < line_no <= len(lines) else match.group(0)
+            actual_rule_id = rule_id
+            actual_category = category
+            actual_msg = msg
+            actual_fix = fix
+            if rule_id.startswith("PARRY-SEC-") and is_canary_token(raw_line):
+                actual_rule_id = "PARRY-SEC-CANARY"
+                actual_category = "security"
+                actual_msg = "Canary token decoy detected in source: intentional intrusion tripwire."
+                actual_fix = "Preserve decoy token to detect unauthorized cloning or repository breaches."
+
             findings.append(
                 Finding(
-                    rule_id=rule_id,
-                    category=category,
-                    severity="error" if category == "security" else "warning",
+                    rule_id=actual_rule_id,
+                    category=actual_category,
+                    severity="warning" if actual_rule_id == "PARRY-SEC-CANARY" else ("error" if actual_category == "security" else "warning"),
                     language=language,
                     file_path=file_path,
                     line=line_no,
                     column=col_no,
                     enclosing_symbol=sym,
-                    fingerprint=compute_ast_fingerprint(file_path, rule_id, sym, raw_line),
-                    message=msg,
-                    suggestion=fix,
-                    prompt_injection_patch=compute_remediation(rule_id, raw_line, language)[0],
-                    suggested_replacement=compute_remediation(rule_id, raw_line, language)[1],
+                    fingerprint=compute_ast_fingerprint(file_path, actual_rule_id, sym, raw_line),
+                    message=actual_msg,
+                    suggestion=actual_fix,
+                    prompt_injection_patch=compute_remediation(actual_rule_id, raw_line, language)[0],
+                    suggested_replacement=compute_remediation(actual_rule_id, raw_line, language)[1],
                 )
             )
 
@@ -2067,6 +2210,20 @@ def build_sarif_report(findings: List[Finding]) -> Dict[str, Any]:
     }
 
 
+def format_agent_feedback(findings: List[Finding]) -> str:
+    """
+    Format findings into sub-second, machine-parsable lines for AI coding agent self-correction.
+    Format: PARRY_AGENT_REPAIR | <file>:<line>:<col> | <rule_id> | <message> | REMEDY: <remedy>
+    """
+    if not findings:
+        return "[OK] PARRY_AGENT_CLEAN: 0 issues detected.\n"
+    lines: List[str] = []
+    for f in findings:
+        remedy = f.prompt_injection_patch or f.suggested_replacement or f.suggestion or "Review and fix violation."
+        lines.append(f"PARRY_AGENT_REPAIR | {f.file_path}:{f.line}:{f.column} | {f.rule_id} | {f.message} | REMEDY: {remedy}")
+    return "\n".join(lines) + "\n"
+
+
 def format_human_review_brief(findings: List[Finding]) -> str:
     """
     Format findings into two partitioned sections for human developers:
@@ -2321,286 +2478,6 @@ def compute_check_exit_code(findings: List[Finding], fail_on: str) -> int:
 
 
 
-# ---------------------------------------------------------------------------
-# Web3 Pre-Audit Triage & Outreach Scripts (`parry.py triage`)
-# ---------------------------------------------------------------------------
-
-
-def resolve_triage_target(raw_target: str) -> Tuple[pathlib.Path, str, bool]:
-    """
-    If `raw_target` is a GitHub URL, shallow-clone into cache directory.
-    Returns `(local_path, project_name, is_temp_clone)`.
-    """
-    cleaned = raw_target.strip()
-    if cleaned.startswith(("https://github.com/", "http://github.com/", "github.com/")):
-        if not cleaned.startswith("http"):
-            cleaned = "https://" + cleaned
-        slug = cleaned.rstrip("/").split("github.com/")[-1].replace(".git", "")
-        safe_slug = re.sub(r"[^A-Za-z0-9_.-]", "_", slug)
-        cache_base = pathlib.Path(tempfile.gettempdir()) / "parry_triage"
-        cache_base.mkdir(parents=True, exist_ok=True)
-        clone_dir = cache_base / safe_slug
-        if clone_dir.exists():
-            shutil.rmtree(clone_dir, ignore_errors=True)
-        subprocess.run(
-            ["git", "clone", "--depth", "1", cleaned, str(clone_dir)],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        return clone_dir, slug, True
-
-    local_path = pathlib.Path(cleaned).resolve()
-    return local_path, local_path.name, False
-
-
-def generate_triage_markdown(
-    project_name: str,
-    target_label: str,
-    files_scanned: int,
-    elapsed_ms: float,
-    findings: List[Finding],
-    base_dir: pathlib.Path,
-) -> str:
-    """Build a customer-facing Web3 Pre-Audit Triage Report + ready-to-send X DM for `@parrycli`."""
-    web3_findings = [f for f in findings if f.rule_id.startswith("PARRY-WEB3-")]
-    top_findings = (web3_findings + [f for f in findings if not f.rule_id.startswith("PARRY-WEB3-")])[:8]
-
-    def rel_path(fp: str) -> str:
-        try:
-            return str(pathlib.Path(fp).resolve().relative_to(base_dir.resolve())).replace("\\", "/")
-        except Exception:
-            return pathlib.Path(fp).name
-
-    lines = [
-        f"# 🛡️ Parry Web3 & AI-Agent Pre-Audit Triage Brief — `{project_name}`",
-        "",
-        f"- **Target Scanned:** `{target_label}`",
-        f"- **Files Analyzed:** `{files_scanned}` (Rust, TypeScript, JavaScript, Python)",
-        f"- **Scan Latency:** `{elapsed_ms:.2f} ms`",
-        f"- **Total Issues Flagged:** `{len(findings)}` (`{len(web3_findings)}` Web3-specific treasury/agent findings)",
-        f"- **Prepared By:** Parry Security Desk ([@parrycli](https://x.com/parrycli) · https://parry.scopeledger.net/web3)",
-        "",
-        "---",
-        "",
-        "## 1. Priority Findings Snapshot",
-        "",
-    ]
-
-    if not top_findings:
-        lines.extend(
-            [
-                "✅ **0 static pattern or lockfile slopsquatting findings detected in initial surface pass.**",
-                "",
-                "For deep cross-file symbol graph verification and Stage-3 Multi-AI semantic invariant hardening, book a 48-Hour Security Sprint at https://parry.scopeledger.net/web3.",
-                "",
-            ]
-        )
-    else:
-        for idx, f in enumerate(top_findings, start=1):
-            rpath = rel_path(f.file_path)
-            lines.extend(
-                [
-                    f"### {idx}. `[{f.rule_id}]` in `{rpath}:{f.line}` (`fn {f.enclosing_symbol}`)",
-                    f"- **Category / Severity:** `{f.category.upper()}` (`{f.severity.upper()}`)",
-                    f"- **Diagnostic:** {f.message}",
-                    f"- **Recommended Fix:** {f.suggestion}",
-                    "",
-                ]
-            )
-
-    # Build Ready-to-Send X DM for @parrycli outreach
-    lines.extend(
-        [
-            "---",
-            "",
-            "## 2. Ready-to-Send X DM Script (From `@parrycli`)",
-            "",
-            "```text",
-        ]
-    )
-
-    if top_findings:
-        f0 = top_findings[0]
-        rpath0 = rel_path(f0.file_path)
-        lines.extend(
-            [
-                f"Hey team — ran our Web3 & AI-Agent static analyzer (Parry) across {project_name} and noticed {len(findings)} high-priority pattern(s) that standard linters (`cargo check` / `eslint`) let through:",
-                "",
-                f"• [{f0.rule_id}] in `{rpath0}:{f0.line}` ({f0.message})",
-            ]
-        )
-        if len(top_findings) > 1:
-            f1 = top_findings[1]
-            rpath1 = rel_path(f1.file_path)
-            lines.append(f"• [{f1.rule_id}] in `{rpath1}:{f1.line}` ({f1.message})")
-        lines.extend(
-            [
-                "",
-                "We're onboarding 3 Founding Web3 teams this month for our 48-Hour Pre-Audit & AI-Code Hardening Sprint ($950 USDC flat — includes full repo + lockfile slopsquatting audit, ready-to-merge fix PRs, and CI/MCP guardrails).",
-                "",
-                "Want me to send over the full triage report + patch diff for that finding? https://parry.scopeledger.net/web3",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                f"Hey team — took a look at {project_name}. Initial surface looks clean against standard pattern slop. If you're building with autonomous AI agents or rolling out Solana/Anchor upgrades this month, we run 48-Hour AI-Code Pre-Audits ($950 USDC flat) to catch treasury-draining edge cases before mainnet. Let me know if you'd like us to take a pass: https://parry.scopeledger.net/web3",
-            ]
-        )
-
-    lines.extend(
-        [
-            "```",
-            "",
-            "---",
-            "",
-            "## 3. Recommended Remediation & Sprint Next Steps",
-            "",
-            "1. **Apply Instant AST Patches:** Run `python parry.py fix <path>` locally to auto-remediate deterministic defects.",
-            "2. **Add CI Gatekeeper:** Add `.github/workflows/parry.yml` to deflect future PR slop automatically.",
-            "3. **Book 48-Hour Security Sprint ($950 USDC):** https://parry.scopeledger.net/web3 or DM `@parrycli`.",
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def run_web3_triage(raw_target: str, out_path: Optional[pathlib.Path] = None) -> int:
-    """Run full Web3 & AI-Agent pre-audit triage over target directory or GitHub URL."""
-    print(f"[*] Triaging target: {raw_target} ...")
-    t0 = time.perf_counter()
-    try:
-        target_dir, project_name, is_temp = resolve_triage_target(raw_target)
-    except Exception as exc:
-        print(f"[!] Failed to resolve target {raw_target}: {exc}", file=sys.stderr)
-        return 1
-
-    files = collect_target_files([str(target_dir)], [])
-    all_findings: List[Finding] = []
-    for f in files:
-        all_findings.extend(scan_file(f))
-
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    report_md = generate_triage_markdown(
-        project_name=project_name,
-        target_label=raw_target,
-        files_scanned=len(files),
-        elapsed_ms=elapsed_ms,
-        findings=all_findings,
-        base_dir=target_dir,
-    )
-
-    if out_path:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(report_md, encoding="utf-8")
-        print(f"[OK] Pre-Audit Triage Report written to {out_path} ({len(all_findings)} findings across {len(files)} files).")
-    else:
-        print(report_md)
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Automated Web3 Prospect Discovery & Outreach Queue (`parry.py prospect`)
-# ---------------------------------------------------------------------------
-
-PROSPECT_QUERIES: Dict[str, str] = {
-    "solana": "solana anchor language:Rust stars:5..500 pushed:>2026-01-01",
-    "anchor": "anchor-lang solana language:Rust stars:5..500",
-    "ai-agent": "solana agent wallet OR elizaos OR solana-agent-kit language:TypeScript stars:5..500",
-    "web3-py": "web3 eth_account agent language:Python stars:5..500",
-}
-
-
-def fetch_github_prospect_repos(query_key: str, limit: int) -> List[Dict[str, Any]]:
-    raw_query = PROSPECT_QUERIES.get(query_key, query_key)
-    encoded = urllib.parse.quote(raw_query)
-    url = f"https://api.github.com/search/repositories?q={encoded}&sort=updated&order=desc&per_page={max(1, min(limit, 15))}"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Parry-Web3-Security-Scanner/0.1 (+https://parry.scopeledger.net/web3)",
-    }
-    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if gh_token:
-        headers["Authorization"] = f"Bearer {gh_token}"
-
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-        return payload.get("items", [])[:limit]
-
-
-def run_web3_prospect(query_key: str, limit: int, out_path: pathlib.Path) -> int:
-    print(f"[*] Searching GitHub for active Web3/AI-Agent repositories (preset: {query_key}, limit: {limit})...")
-    try:
-        items = fetch_github_prospect_repos(query_key, limit)
-    except Exception as exc:
-        print(f"[WARN] GitHub API search failed ({exc}). Generating local benchmark prospect queue instead.")
-        items = []
-
-    sections: List[str] = [
-        "# ⚡ Parry Web3 Outbound Prospect Queue (`@parrycli`)",
-        "",
-        f"- **Generated:** `{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`",
-        f"- **Query Preset:** `{query_key}`",
-        f"- **Landing Funnel:** https://parry.scopeledger.net/web3 (`$950 USDC Founding 48-Hr Security Sprint`)",
-        "",
-        "---",
-        "",
-    ]
-
-    if not items:
-        # Local fallback demonstration on current repository so command always produces a usable queue offline
-        local_dir = pathlib.Path(__file__).parent
-        files = collect_target_files([str(local_dir)], [])
-        findings: List[Finding] = []
-        for f in files:
-            findings.extend(scan_file(f))
-        sections.append(
-            generate_triage_markdown(
-                project_name="local-benchmark-demo",
-                target_label=str(local_dir),
-                files_scanned=len(files),
-                elapsed_ms=1.42,
-                findings=findings,
-                base_dir=local_dir,
-            )
-        )
-    else:
-        for idx, repo in enumerate(items, start=1):
-            full_name = repo.get("full_name", f"repo-{idx}")
-            html_url = repo.get("html_url", "")
-            stars = repo.get("stargazers_count", 0)
-            desc = repo.get("description") or "No description"
-            print(f"  [{idx}/{len(items)}] Triaging {full_name} ({stars} stars)...")
-            t0 = time.perf_counter()
-            try:
-                clone_path, _, _ = resolve_triage_target(html_url)
-                files = collect_target_files([str(clone_path)], [])
-                findings = []
-                for f in files:
-                    findings.extend(scan_file(f))
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
-                sections.append(f"## Prospect #{idx}: [{full_name}]({html_url}) ({stars} stars)")
-                sections.append(f"> {desc}\n")
-                sections.append(
-                    generate_triage_markdown(
-                        project_name=full_name,
-                        target_label=html_url,
-                        files_scanned=len(files),
-                        elapsed_ms=elapsed_ms,
-                        findings=findings,
-                        base_dir=clone_path,
-                    )
-                )
-            except Exception as clone_exc:
-                sections.append(f"## Prospect #{idx}: [{full_name}]({html_url}) -- skipped ({clone_exc})\n")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(sections), encoding="utf-8")
-    print(f"[OK] Prospect outreach queue saved to {out_path}")
-    return 0
-
 
 def run_benchmark(
     bench_dir: pathlib.Path,
@@ -2720,32 +2597,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="parry", description="Parry: Deflect AI slop before git push.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_triage = sub.add_parser(
-        "triage",
-        help="Generate a Web3 & AI-Agent Pre-Audit Triage Report + @parrycli X DM script for a local path or GitHub repo URL",
-    )
-    p_triage.add_argument("target", help="Local directory path or GitHub repository URL (e.g. https://github.com/org/repo)")
-    p_triage.add_argument("--out", "-o", default=None, help="Optional output Markdown file path")
-
-    p_prospect = sub.add_parser(
-        "prospect",
-        help="Discover active public Web3/Solana/AI-Agent repositories on GitHub and build an outreach queue",
-    )
-    p_prospect.add_argument(
-        "--query",
-        "-q",
-        default="solana",
-        choices=["solana", "anchor", "ai-agent", "web3-py"],
-        help="Target ecosystem query preset or custom search string",
-    )
-    p_prospect.add_argument("--limit", "-n", type=int, default=5, help="Number of repositories to triage (default: 5)")
-    p_prospect.add_argument(
-        "--out",
-        "-o",
-        default="parry_prospect_queue.md",
-        help="Output Markdown queue path",
-    )
-
     p_bench = sub.add_parser("bench", help="Run the Top-100 Evil AI Benchmark suite & Model Leaderboard")
     p_bench.add_argument("--dir", default=str(pathlib.Path(__file__).parent / "benchmark"), help="Benchmark directory")
     p_bench.add_argument("--leaderboard", action="store_true", help="Display comparative frontier model reliability leaderboard")
@@ -2757,7 +2608,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_check.add_argument("--baseline", default=".parry-baseline.json", help="Baseline suppression file")
     p_check.add_argument("--fix", action="store_true", help="Output LLM prompt patches and deterministic auto-fix diffs")
     p_check.add_argument("--in-place", action="store_true", help="Apply deterministic fixes in-place (requires --fix)")
-    p_check.add_argument("--format", choices=["cli", "json", "sarif", "pr-comment"], default="cli", help="Output format")
+    p_check.add_argument("--format", choices=["cli", "json", "sarif", "pr-comment", "agent"], default="cli", help="Output format")
+    p_check.add_argument("--agent", action="store_true", help="Machine-parsable sub-second output mode for AI agents")
     p_check.add_argument("--output", default=None, help="Optional file path to write formatted output")
     p_check.add_argument("--fail-on", choices=["error", "warning", "none"], default="warning", help="Minimum severity triggering exit code 1")
     p_check.add_argument("--exclude", action="append", default=[], help="Exclude directory or glob pattern")
@@ -2822,14 +2674,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.cmd == "mcp":
         return run_mcp_stdio_server()
-
-    if args.cmd == "triage":
-        out_p = pathlib.Path(args.out) if args.out else None
-        return run_web3_triage(args.target, out_p)
-
-    if args.cmd == "prospect":
-        out_p = pathlib.Path(args.out)
-        return run_web3_prospect(args.query, args.limit, out_p)
 
 
     def _run_ide_bootstrap(ide_name: str, scope: str, ws_path: str, no_pre_commit: bool, no_post_edit: bool, instructions: bool, dry_run: bool, as_json: bool) -> int:
@@ -3024,6 +2868,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 out_path.write_text(audit_report + "\n", encoding="utf-8")
             else:
                 print(audit_report)
+            return exit_code
+
+        if getattr(args, "agent", False) or args.format == "agent":
+            agent_text = format_agent_feedback(all_findings)
+            if args.output:
+                out_path = pathlib.Path(args.output)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(agent_text, encoding="utf-8")
+            else:
+                sys.stdout.write(agent_text)
             return exit_code
 
         if args.review:

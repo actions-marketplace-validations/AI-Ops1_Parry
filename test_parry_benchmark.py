@@ -214,24 +214,3 @@ class TestParryEvilBenchmarkAndFingerprinting(unittest.TestCase):
                 f"Expected 0 findings on hardened patch for {expected_rule}, got {good_findings}",
             )
 
-    def test_triage_report_and_dm_generator(self) -> None:
-        """Verify `parry.py triage` writes a valid Markdown brief and @parrycli X DM script."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = pathlib.Path(tmp)
-            vault_rs = tmp_path / "vault.rs"
-            vault_rs.write_text(
-                "pub struct Withdraw<'info> {\n    pub authority: AccountInfo<'info>,\n}\n",
-                encoding="utf-8",
-            )
-            out_md = tmp_path / "triage_report.md"
-            rc = parry.run_web3_triage(str(tmp_path), out_md)
-            self.assertEqual(rc, 0)
-            self.assertTrue(out_md.exists())
-            content = out_md.read_text(encoding="utf-8")
-            self.assertIn("PARRY-WEB3-RS001", content)
-            self.assertIn("@parrycli", content)
-            self.assertIn("https://parry.scopeledger.net/web3", content)
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

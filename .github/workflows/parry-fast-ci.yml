@@ -1,0 +1,32 @@
+name: Parry Sub-Second Fast-Fail CI for AI Coding Agents
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  fast-gate:
+    name: Parry Sub-Second Agent Guardrail
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Parry Sub-Second AST Scan (Agent Mode)
+        run: |
+          python3 parry.py check --diff-base origin/${{ github.base_ref || 'main' }} --agent --fail-on warning

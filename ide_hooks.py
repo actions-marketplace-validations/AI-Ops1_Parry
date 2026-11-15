@@ -324,6 +324,67 @@ def install_git_pre_commit_hook(
     )
 
 
+
+
+def install_git_pre_push_hook(
+    workspace: pathlib.Path | str,
+    python_exe: Optional[str] = None,
+    parry_script: Optional[str] = None,
+    dry_run: bool = False,
+) -> BootstrapAction:
+    """Install or update a git pre-push hook preventing one-way door destructive actions."""
+    ws = pathlib.Path(workspace) if isinstance(workspace, str) else workspace
+    py_exe = python_exe or _default_python_executable()
+    p_script = parry_script or _default_parry_script()
+
+    git_dir = ws / ".git"
+    if not git_dir.is_dir():
+        return BootstrapAction(
+            ide="git",
+            kind="pre-push",
+            path=str(git_dir / "hooks" / "pre-push"),
+            status="skip",
+            detail="No .git directory found in workspace; skipping git pre-push hook.",
+        )
+
+    hook_path = git_dir / "hooks" / "pre-push"
+    hook_body = "\n".join(
+        [
+            f"{shlex.quote(py_exe)} {shlex.quote(p_script)} check",
+        ]
+    )
+
+    if hook_path.exists():
+        existing = hook_path.read_text(encoding="utf-8")
+        updated, status = _upsert_marker_block(
+            existing, hook_body, HASH_BLOCK_START, HASH_BLOCK_END
+        )
+    else:
+        shebang_doc = f"#!/usr/bin/env sh\nset -e\n\n{HASH_BLOCK_START}\n{hook_body}\n{HASH_BLOCK_END}\n"
+        updated = shebang_doc
+        status = "create"
+
+    if status != "unchanged" and not dry_run:
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        hook_path.write_text(updated, encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(hook_path, 0o755)
+
+    detail = (
+        "Already configured cleanly."
+        if status == "unchanged"
+        else f"{'Would ' + status if dry_run else status.capitalize() + 'd'} git pre-push hook."
+    )
+    return BootstrapAction(
+        ide="git",
+        kind="pre-push",
+        path=str(hook_path),
+        status=status,
+        detail=detail,
+        preview=updated,
+    )
+
+
 def install_ide_hooks(
     ide: str = "all",
     scope: str = "workspace",
