@@ -97,7 +97,14 @@ Stop hallucinated packages and logic bugs before they ever reach a git commit.
   ```bash
   python parry.py mcp
   ```
-  Exposes the `parry_verify_code` tool directly to Claude, Gemini, and Cursor so the model inspects and self-heals its own code before saving.
+  Exposes the `parry_verify_code` tool directly to Claude, Gemini, Cursor, and OpenAI Codex so the model inspects and self-heals its own code before saving.
+- **OpenAI Codex CLI (`~/.codex/config.toml`)**:
+  ```toml
+  [mcp_servers.parry]
+  command = "python3"
+  args = ["/path/to/Parry/parry.py", "mcp"]
+  enabled = true
+  ```
 
 ---
 
